@@ -1,5 +1,12 @@
 import argparse
 import subprocess
+import re
+
+keywords = ["vulnerability", "buffer overflow", "stack overflow", "uninitialized variable", "memory leak",
+            "corruption", "security issue", "UAF", "use after free", "dangling pointer", "heap overflow",
+            "integer overflow", "memory leak", "segmentation fault", "double free", "format string attack",
+            "race condition", "command injection", "null pointer dereference", "out of bounds access",
+            "recursion overflow", "use after free", "dangling"]
 
 def get_file_path_from_cli():
     """
@@ -23,16 +30,15 @@ def read_file(file_path):
     try:
         with open(file_path, 'r') as file:
             content = file.readlines()
-            print(f"Content of {file_path}:\n")
-            print(content)
+            # print(f"Content of {file_path}:\n")
+            # print(content)
             return content
     except Exception as e:
         print(f"Error reading file {file_path}: {e}")
         return []
 
 
-
-def split_into_chunks(lines, chunk_size=10):
+def split_into_chunks(lines, chunk_size=15):
     """
     Splits the list of lines into chunks of a specified size and prints each chunk.
     :param lines:
@@ -42,10 +48,9 @@ def split_into_chunks(lines, chunk_size=10):
     chunk_arr = []
     for i in range(0, len(lines), chunk_size):
         chunk = lines[i:i + chunk_size]
-        chunk_arr.append((chunk, i+1))
-        print(f"Chunk {i // chunk_size + 1}:\n{chunk}\n")
-
+        chunk_arr.append((chunk, i + 1))
     return chunk_arr
+
 
 def build_prompt(snippet):
     """
@@ -60,11 +65,12 @@ def build_prompt(snippet):
 
     code = ''.join(snippet)
     prompt = (
-        "Analyze the following C or C++ code snippet for potential vulnerabilities:\n\n"
-        "(e.g buffer overflow, use of uninitialized variables, etc.)\n\n" + code +
-        "\n\nPlease provide a summary of any vulnerabilities found."
+            "Analyze the following C or C++ code snippet for potential vulnerabilities:\n\n"
+            "(e.g buffer overflow, use of uninitialized variables, etc.)\n\n" + code +
+            "\n\nPlease provide a summary of any vulnerabilities found."
     )
     return prompt
+
 
 def query_phi_model(prompt):
     """
@@ -79,7 +85,7 @@ def query_phi_model(prompt):
     try:
         result = subprocess.run(
             ["ollama", "run", "phi"],
-            input = prompt.encode(),
+            input=prompt.encode(),
             capture_output=True,
             timeout=60
         )
@@ -94,43 +100,88 @@ def is_vulnerability_detected(output):
     :param output:
     :return:
     """
-    keywords = ["volnerability", "buffer overflow", "uninitialized variable", "memory leak",
-                "corruption", "security issue", ""
-                                                                                                                             "use after free",
-                "dangling"]
+    if "i am an ai language model" in output or "i'm sorry" in output:
+        return False
+
+    if "does not contain any obvious vulnerabilities" in output:
+        return "No obvious vulnerabilities."
+
     return any(k in output.lower() for k in keywords)
+
+
+import re
 
 def extract_summary(output):
     """
-    Extract a summary from the output of the Phi model.
-    :param output:
-    :return:
+    Extracts a brief 1-sentence summary from the model's output.
+    Skips generic LLM replies and preserves original casing.
     """
-    # This is a simple implementation; you may want to improve it based on your needs.
-    lines = output.strip().splitlines()
-    for line in lines:
-        if any(k in line.lower() for k in ["overflow", "use-after-free", "vulnerability"]):
-            return line.strip()
-        # Fallback if no match found
-        return output.strip()[:100] + "..." if output.strip() else "[No summary]"
+    output = output.strip()
+    if not output:
+        return None
+
+    # Only used for filtering junk
+    lower = output.lower()
+    if "i am an ai language model" in lower or "i'm sorry" in lower:
+        return None
+
+    # Extract the first sentence (brief summary)
+    match = re.match(r"^(.*?[.?!])(\s|$)", output)
+    if match:
+        return match.group(1).strip()
+
+    # Fallback: truncate cleanly if needed
+    return output[:150].strip() + "..." if len(output) > 150 else output
+
+
+
+import json
+
+def export_to_json(results, filename="analysis_results.json"):
+    """
+    Export the analysis results to a JSON file.
+
+    Args:
+        results (list): List of dictionaries with analysis data.
+        filename (str): The filename to write the JSON to.
+    """
+    try:
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        print(f"\n📄 Full analysis saved to: {filename}")
+    except Exception as e:
+        print(f"❌ Error saving JSON file: {e}")
+
 
 
 def main():
+    summary = " "
+    results = []
     file_path = get_file_path_from_cli()
     lines = read_file(file_path)
     snippets = split_into_chunks(lines, chunk_size=10)
 
     for snippet_lines, line_start in snippets:
-        print(f"\n--- Analyzing lines {line_start}-{line_start + len(snippet_lines) - 1} ---")
+        #print(f"\n--- Analyzing lines {line_start}-{line_start + len(snippet_lines) - 1} ---")
         prompt = build_prompt(snippet_lines)
         output = query_phi_model(prompt)
         if is_vulnerability_detected(output):
             summary = extract_summary(output)
-            print(f"⚠️  Line {line_start}: {summary}")
-        else:
-            print("✅ No issue detected.")
+            if summary:
+                print(f"⚠️ Line {line_start}: {summary}")
+            else:
+                print(f"✅ Line {line_start}: No issue detected.")
+        # else:
+        #     print("✅ No issue detected.")
 
+        results.append({
+            "start_line": line_start,
+            "end_line": line_start + len(snippet_lines) - 1,
+            "summary": summary or "No issue detected.",
+            "details": output.strip()  # full LLM output
+        })
 
+    export_to_json(results, filename="analysis_results.json")
 
 
 if __name__ == "__main__":
