@@ -1,5 +1,6 @@
 ## LLM-Powered Vulnerability Scanner for C/C++ Code
 
+[GitHub Repository] https://github.com/peleglampl/llm-code-analyzer.git
 ## Description:
 
 This tool scans C and C++ code for potential security vulnerabilities using the Phi LLM (via Ollama). It splits the source code into chunks, sends them to the model, and reports real vulnerabilities along with suggested one-line fixes.

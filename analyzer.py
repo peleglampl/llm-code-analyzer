@@ -233,14 +233,14 @@ def main():
         output = query_phi_model(prompt)  # Query the Phi model with the prompt
         fix = extract_fix(output)  # Extract any fix suggestion from the output
         if is_vulnerability_detected(output):  # Check if the output indicates a vulnerability
-            result_type = "Vulnerability"
+            result_type = "Vulnerability"  # Type of result, added for clarity
             summary = extract_summary(output)
             if summary:
                 print(f"⚠️ Line {line_start}: {summary}")  # Print the summary of the detected issue
                 if fix:
                     print(f"🔧 Suggested Fix: {fix}")
         else:
-            result_type = "No Issue"
+            result_type = "No Issue"  # Type of result, added for clarity
 
         # Store the results in a structured format
         results.append({
