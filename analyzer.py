@@ -166,7 +166,7 @@ def is_vulnerability_detected(output) -> bool:
     return any(k in output for k in keywords)
 
 
-def extract_summary(output) -> str:
+def extract_summary(output):
     """
     Extract a one-line summary of the vulnerability from the model output.
     Args:
@@ -190,6 +190,9 @@ def extract_summary(output) -> str:
 
 
 def extract_fix(output):
+    """ Extract a suggested fix from the model output.
+    Args:
+        output (str): The output from the Phi model."""
     # Try "Fix:" first
     match = re.search(r'fix[:\s-]+(.+?)([.?!]|$)', output, re.IGNORECASE)
     if match:
@@ -202,7 +205,7 @@ def extract_fix(output):
     return None
 
 
-def export_to_json(results, filename="analysis_results.json"):
+def export_to_json(results, filename="analysis_results.json") -> None:
     """
     Export the analysis results to a JSON file.
 
@@ -210,10 +213,12 @@ def export_to_json(results, filename="analysis_results.json"):
         results (list): List of dictionaries with analysis data.
         filename (str): The filename to write the JSON to.
     """
+    # try to save the results to a JSON file
     try:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         print(f"\n Full analysis saved to: {filename}")
+    # catch any exceptions that occur during file writing
     except Exception as e:
         print(f"Error saving JSON: {e}")
 
