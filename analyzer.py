@@ -3,13 +3,15 @@ import subprocess
 import json
 import re
 
+# List of keywords to identify vulnerabilities in the output from the Phi model.
 keywords = ["vulnerability", "buffer overflow", "stack overflow", "uninitialized variable", "memory leak",
             "corruption", "security issue", "UAF", "use after free", "dangling pointer", "heap overflow",
             "integer overflow", "memory leak", "segmentation fault", "double free", "format string attack",
             "race condition", "command injection", "null pointer dereference", "out of bounds access",
             "recursion overflow", "use after free", "dangling"]
 
-general_phrase = ["it's difficult to say", "there might be", "it could be", "this may indicate",
+# General phrases that indicate the model is not providing a specific vulnerability or fix.
+general_phrase = ["no known", "it's difficult to say", "there might be", "it could be", "this may indicate",
                   "there are no known vulnerabilities", "appears safe",
                   "i am an ai language model", "i'm sorry", "without seeing the code",
                   "difficult to provide", "there is no clear indication", "could include",
@@ -75,13 +77,12 @@ def build_prompt(snippet):
     code = ''.join(snippet)
     prompt = (
             "You are a security expert analyzing C/C++ code.\n"
-            "Analyze the following code snippet and identify ONLY if there is a REAL vulnerability in the code itself.\n"
-            "Avoid guessing. Do not respond if the snippet is safe.\n\n"
+            "Only respond if you detect a REAL vulnerability in the code snippet below.\n"
+            "Do not speculate or guess. If no vulnerability is found, reply exactly: 'No issue detected.'\n\n"
             "Code:\n\n" + code + "\n\n"
                                  "If a vulnerability exists:\n"
-                                 "- Provide a **one-line summary** of the issue.\n"
-                                 "- Then write a **suggested fix** in a single line that begins exactly with 'Fix:'.\n"
-                                 "If no vulnerability is found, reply only with: 'No issue detected.'"
+                                 "- Provide a one-line summary.\n"
+                                 "- Then write: Fix: <one-line fix>."
     )
 
     return prompt
@@ -111,56 +112,51 @@ def query_phi_model(prompt):
 
 def is_vulnerability_detected(output):
     """
-    Check if the output from the Phi model contains keywords indicating a vulnerability.
-    :param output:
-    :return:
+    Check if the output from the Phi model indicates a vulnerability.
+    Args:
+        output (str): The output from the Phi model.
     """
+    output = output.lower()
     if (
-            any(phrase in output.lower() for phrase in general_phrase)
+        "error querying phi" in output or
+        any(phrase in output for phrase in general_phrase)
     ):
         return False
-
-    return any(k in output.lower() for k in keywords)
+    return any(k in output for k in keywords)
 
 
 def extract_summary(output):
     """
-    Extract a brief, human-friendly summary of vulnerabilities from the model output.
-    Avoids cut-off lists and generic disclaimers.
+    Extract a one-line summary of the vulnerability from the model output.
     """
     output = output.replace("\n", " ").replace("\r", " ").strip()
-
     lower = output.lower()
-    if (
-            any(phrase in lower for phrase in general_phrase)
-    ):
+
+    if any(phrase in lower for phrase in general_phrase):
         return None
 
-    if re.search(r"\b1\.\s+.*", output):
-        match = re.search(r"\b1\.\s+(.*?)([.?!])", output)
-        if match:
-            vuln = match.group(1)
-            return f"Possible vulnerability: {vuln.strip()}."
+    match = re.search(r"1\.\s+(.*?)([.?!])", output)
+    if match:
+        return f"Possible vulnerability: {match.group(1).strip()}."
 
-    # First complete sentence
     match = re.match(r"^(.*?[.?!])(\s|$)", output)
     if match:
         return match.group(1).strip()
 
-    # Fallback
     return output[:150].strip() + "..." if len(output) > 150 else output
 
 
 def extract_fix(output):
-    """
-    Extract a fix suggestion from the model output.
-    If no fix is suggested, return None.
-    """
-    output = output.lower()
-    if "fix:" in output:
-        match = re.search(r"fix:\s*(.*?)([.?!]|$)", output)
-        if match:
-            return match.group(1).strip()
+    # Try "Fix:" first
+    match = re.search(r'fix[:\s-]+(.+?)([.?!]|$)', output, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
+    # Try "suggested fix" as backup
+    match = re.search(r'suggested fix[:\s-]+(.+?)([.?!]|$)', output, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+
     return None
 
 
@@ -175,9 +171,9 @@ def export_to_json(results, filename="analysis_results.json"):
     try:
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"\n📄 Full analysis saved to: {filename}")
+        print(f"\n Full analysis saved to: {filename}")
     except Exception as e:
-        print(f"❌ Error saving JSON file: {e}")
+        print(f"Error saving JSON: {e}")
 
 
 def main():
@@ -209,7 +205,7 @@ def main():
             "end_line": line_start + len(snippet_lines) - 1,
             "summary": summary or "No issue detected.",
             "details": output.strip(),  # full LLM output
-            "fix": fix.strip() if fix is not None else "No fix suggested."  # fix suggestion
+            "fix": fix or "No fix suggested."  # fix suggestion
         })
 
     export_to_json(results, filename="analysis_results.json")
