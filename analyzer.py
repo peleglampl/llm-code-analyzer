@@ -1,7 +1,9 @@
 import argparse
+import os.path
 import subprocess
 import json
 import re
+import sys
 
 # List of keywords to identify vulnerabilities in the output from the Phi model.
 keywords = ["vulnerability", "buffer overflow", "stack overflow", "uninitialized variable", "memory leak",
@@ -21,19 +23,59 @@ general_phrase = ["no known", "it's difficult to say", "there might be", "it cou
                   "not found", "no issues detected", "no vulnerabilities", "no real vulnerability"]
 
 
-def get_file_path_from_cli():
+def validate_file_path(file_path) -> str:
+    """
+    Validate the file path to ensure it exists, is a file, and is a C or C++ source file.
+    """
+    if not os.path.isfile(file_path):
+        print(f"Error: The file '{file_path}' does not exist or is not a valid file.")
+        sys.exit(1)
+    if not file_path.endswith(('.c', '.cpp', '.h', '.hpp')):
+        print("Error: The file must be a C or C++ source file (ending with .c, .cpp, .h, or .hpp).")
+        sys.exit(1)
+    if os.path.getsize(file_path) == 0:
+        print(f"Error: The file '{file_path}' is empty.")
+        sys.exit(1)
+    return file_path
+
+
+def validate_chunk_size(chunk_size) -> int:
+    """
+    Validate the chunk size to ensure it is a positive integer and not too large.
+    """
+    if chunk_size <= 0:
+        print("Error: Chunk size must be a positive integer.")
+        sys.exit(1)
+    if chunk_size > 100:
+        print("Warning: Chunk size is larger than 100. This may lead to long processing times.")
+        sys.exit(1)
+    return chunk_size
+
+
+def get_file_path_from_cli() -> tuple:
     """
     Get the file path of a C or C++ file from command line arguments.
     Returns:
         str: The path to the C or C++ file.
     """
+    # Create an argument parser
     parser = argparse.ArgumentParser(description='Analyze a C or C++ file for vulnerabilities.')
+    # Add a positional argument for the file path
     parser.add_argument('file_path', type=str, help='Path to the C or C++ file to analyze')
+    # Optional argument for chunk size
+    parser.add_argument('chunk_size', type=int, default=10, help='Number of lines per chunk (default: 10)')
     args = parser.parse_args()
-    return args.file_path
+    file_path = args.file_path
+    chunk_size = args.chunk_size
+    # Validate the file path
+    validate_file_path(file_path)
+    # Validate the chunk size
+    validate_chunk_size(chunk_size)
+    # Return the validated file path and chunk size
+    return args.file_path, args.chunk_size
 
 
-def read_file(file_path):
+def read_file(file_path) -> list:
     """
     Reads the given C or C++ file and print its content, and returns the content as a list of lines.
 
@@ -49,7 +91,7 @@ def read_file(file_path):
         return []
 
 
-def split_into_chunks(lines, chunk_size=7):
+def split_into_chunks(lines, chunk_size=10) -> list:
     """
     Splits the list of lines into chunks of a specified size and prints each chunk.
     :param lines:
@@ -57,13 +99,13 @@ def split_into_chunks(lines, chunk_size=7):
     :return:
     """
     chunk_arr = []
-    for i in range(0, len(lines), chunk_size):
+    for i in range(0, len(lines), chunk_size):  # Iterate over the lines in chunks
         chunk = lines[i:i + chunk_size]
         chunk_arr.append((chunk, i + 1))
     return chunk_arr
 
 
-def build_prompt(snippet):
+def build_prompt(snippet) -> str:
     """
     Build a prompt for the Phi model based on the code snippet.
 
@@ -84,11 +126,10 @@ def build_prompt(snippet):
                                  "- Provide a one-line summary.\n"
                                  "- Then write: Fix: <one-line fix>."
     )
-
     return prompt
 
 
-def query_phi_model(prompt):
+def query_phi_model(prompt) -> str:
     """
     Query the Phi model with the given prompt and return the output.
 
@@ -110,7 +151,7 @@ def query_phi_model(prompt):
         return f"Error querying Phi model: {e}"
 
 
-def is_vulnerability_detected(output):
+def is_vulnerability_detected(output) -> bool:
     """
     Check if the output from the Phi model indicates a vulnerability.
     Args:
@@ -125,9 +166,11 @@ def is_vulnerability_detected(output):
     return any(k in output for k in keywords)
 
 
-def extract_summary(output):
+def extract_summary(output) -> str:
     """
     Extract a one-line summary of the vulnerability from the model output.
+    Args:
+        output (str): The output from the Phi model.
     """
     output = output.replace("\n", " ").replace("\r", " ").strip()
     lower = output.lower()
@@ -151,8 +194,7 @@ def extract_fix(output):
     match = re.search(r'fix[:\s-]+(.+?)([.?!]|$)', output, re.IGNORECASE)
     if match:
         return match.group(1).strip()
-
-    # Try "suggested fix" as backup
+    # If "Fix:" is not found, try "suggested fix:"
     match = re.search(r'suggested fix[:\s-]+(.+?)([.?!]|$)', output, re.IGNORECASE)
     if match:
         return match.group(1).strip()
@@ -177,27 +219,28 @@ def export_to_json(results, filename="analysis_results.json"):
 
 
 def main():
-    summary = " "
+    """
+    Main function to run the vulnerability analysis on a C or C++ file.
+    """
     results = []
-    file_path = get_file_path_from_cli()  # Get file path from command line
+    file_path, chunk_size = get_file_path_from_cli()  # Get file path from command line
     lines = read_file(file_path)  # Read the file content
-    snippets = split_into_chunks(lines, chunk_size=10)  # Split into chunks of 10 lines
+    snippets = split_into_chunks(lines, chunk_size)  # Split into chunks of 10 lines
 
     for snippet_lines, line_start in snippets:
-        # print(f"\n--- Analyzing lines {line_start}-{line_start + len(snippet_lines) - 1} ---")
+        summary = None
         prompt = build_prompt(snippet_lines)  # Build the prompt for the Phi model
         output = query_phi_model(prompt)  # Query the Phi model with the prompt
         fix = extract_fix(output)  # Extract any fix suggestion from the output
         if is_vulnerability_detected(output):  # Check if the output indicates a vulnerability
+            result_type = "Vulnerability"
             summary = extract_summary(output)
             if summary:
                 print(f"⚠️ Line {line_start}: {summary}")  # Print the summary of the detected issue
                 if fix:
                     print(f"🔧 Suggested Fix: {fix}")
-            else:
-                print(f"✅ Line {line_start}: No issue detected.")  # Print if no issue is detected
         else:
-            print(f"✅ Line {line_start}: No issue detected.")
+            result_type = "No Issue"
 
         # Store the results in a structured format
         results.append({
@@ -205,7 +248,8 @@ def main():
             "end_line": line_start + len(snippet_lines) - 1,
             "summary": summary or "No issue detected.",
             "details": output.strip(),  # full LLM output
-            "fix": fix or "No fix suggested."  # fix suggestion
+            "fix": fix or "No fix suggested.",  # fix suggestion
+            "type": result_type
         })
 
     export_to_json(results, filename="analysis_results.json")
